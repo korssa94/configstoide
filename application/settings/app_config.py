@@ -13,3 +13,6 @@ class AppConfig:
     
     FILE_ENCODING = "utf-16"  # Гарантирует UTF-16 LE с BOM при генерации исходников
 
+    MASTER_ROW_CTRL  = "контроллер"
+    MASTER_ROW_TE5   = "входы/выходы"
+    MASTER_ROW_TB51  = "сигнализации"

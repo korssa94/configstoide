@@ -11,6 +11,7 @@ def update_configurator_document(filepath, parsed_objects, config_class, logger)
     pythoncom.CoInitialize()
     excel = None
     wb = None
+    is_background = False
 
     # Сначала лечим файл!
     repair_and_cleanup_file(filepath, logger)
@@ -225,6 +226,8 @@ def update_configurator_document(filepath, parsed_objects, config_class, logger)
         else:
             try:
                 excel.ScreenUpdating = True
+                excel.EnableEvents = True   # ← добавить
+                excel.DisplayAlerts = True  # ← добавить
             except:
                 pass
             wb.Save()
@@ -234,10 +237,20 @@ def update_configurator_document(filepath, parsed_objects, config_class, logger)
     except Exception as e:
         logger(f"❌ Ошибка при сборке Документа: {str(e)}", "ERROR")
         try:
-            if 'is_background' in locals() and is_background and 'excel' in locals():
-                excel.Quit()
-            elif 'excel' in locals() and not is_background:
-                excel.ScreenUpdating = True
+            if excel is not None:
+                try: excel.ScreenUpdating = True
+                except: pass
+                try: excel.EnableEvents = True
+                except: pass
+                try: excel.DisplayAlerts = True
+                except: pass
+            if is_background:
+                if wb is not None:
+                    try: wb.Close(SaveChanges=False)
+                    except: pass
+                if excel is not None:
+                    try: excel.Quit()
+                    except: pass
         except:
             pass
         return False

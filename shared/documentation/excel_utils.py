@@ -66,45 +66,40 @@ def repair_and_cleanup_file(filepath, logger):
 
 def fix_print_settings(file_path, logger):
     """
-    1. Если файл не открывается xlwings (ошибка Excel), чистим его через openpyxl.
-    2. Если файл открылся, аккуратно пересоздаем области печати.
+    Аккуратное переименование Print_Area в Область_печати (для ТЭ5).
+    Сохраняет координаты перед переименованием, чтобы не потерять настройки!
     """
-    
-    # --- ЭТАП 1: АВАРИЙНАЯ ОЧИСТКА (если файл поврежден) ---
-    try:
-        # Пробуем открыть файл "обычным" путем
-        wb = openpyxl.load_workbook(file_path, keep_vba=True)
-        # Ищем и удаляем мусорные имена, которые мешают Excel открыться
-        names_to_delete = [n for n in wb.defined_names.keys() if 'Print_Area' in n or 'Print_Titles' in n]
-        if names_to_delete:
-            for name in names_to_delete:
-                del wb.defined_names[name]
-            wb.save(file_path)
-            logger("[ExcelUtils] Файл был поврежден, очистили имена через openpyxl.", "INFO")
-    except Exception as e:
-        logger(f"[ExcelUtils] openpyxl не смог очистить файл (возможно, он не поврежден): {e}", "DEBUG")
-
-    # --- ЭТАП 2: КОРРЕКТНАЯ НАСТРОЙКА (через xlwings) ---
     app = None
     try:
         app = xw.App(visible=False, add_book=False)
         wb = app.books.open(file_path)
         
-        # Пересоздаем области печати "чисто"
-        # Обязательно оборачиваем в list(), чтобы создать статичную копию
-        # и не ломать динамические индексы Excel при удалении элементов
-        for name in list(wb.names):
-            try:
-                if "Print_Area" in name.name or "Print_Titles" in name.name:
-                    name.delete()
-            except Exception:
-                pass
+        mapping = {
+            "Print_Area": "Область_печати",
+            "Print_Titles": "Заголовки_для_печати"
+        }
         
+        # Собираем список имен для перевода
+        names_to_process = [n for n in list(wb.names) if any(k in n.name for k in mapping.keys())]
+        
+        for name in names_to_process:
+            old_name = name.name 
+            ref_range = name.refers_to # СНАЧАЛА СОХРАНЯЕМ КООРДИНАТЫ (Например: ='Вх.А сигн.'!$A$1:$P$214)
+            
+            new_name = old_name
+            for eng, rus in mapping.items():
+                if eng in old_name:
+                    new_name = old_name.replace(eng, rus)
+            
+            name.delete() # Удаляем старое английское имя
+            wb.names.add(new_name, refers_to=ref_range) # Восстанавливаем с русским именем по сохраненным координатам
+        
+        # Даем Excel команду перечитать области, чтобы они отобразились в интерфейсе
         for sheet in wb.sheets:
             try:
-                area = sheet.page_setup.print_area
+                area = sheet.api.PageSetup.PrintArea
                 if area:
-                    sheet.page_setup.print_area = area
+                    sheet.api.PageSetup.PrintArea = area
             except Exception:
                 pass
         

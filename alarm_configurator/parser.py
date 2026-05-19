@@ -333,10 +333,13 @@ class AlarmParser(BaseParser):
             
             rows = list(ws_master.iter_rows(min_row=1, max_row=50, values_only=True))
 
-            row_ctrl = next((i for i, r in enumerate(rows) if r[0] and "контроллер" in str(r[0]).lower()), None)
-            row_te5 = next((i for i, r in enumerate(rows) if r[0] and "входы/выходы" in str(r[0]).lower()), None)
-            row_tb51 = next((i for i, r in enumerate(rows) if r[0] and "сигнализации" in str(r[0]).lower()), None)
-
+            row_ctrl = next((i for i, r in enumerate(rows) if r[0] and AppConfig.MASTER_ROW_CTRL  in str(r[0]).lower()), None)
+            row_te5  = next((i for i, r in enumerate(rows) if r[0] and AppConfig.MASTER_ROW_TE5   in str(r[0]).lower()), None)
+            row_tb51 = next((i for i, r in enumerate(rows) if r[0] and AppConfig.MASTER_ROW_TB51  in str(r[0]).lower()), None)
+            if None in (row_ctrl, row_te5, row_tb51):
+                self.log("⚠️ Не найдены ключевые строки в Мастер-конфигураторе.", "WARNING")
+                return True
+            
             if row_ctrl is not None and row_te5 is not None and row_tb51 is not None:
                 for col_idx in range(1, len(rows[row_ctrl])):
                     tb51_val = rows[row_tb51][col_idx]
