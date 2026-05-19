@@ -15,12 +15,12 @@ import urllib.parse
 
 # Абсолютные импорты настроек
 from application.settings.app_config import AppConfig
-from inout_configurator.settings.te5_config import TE5Config
-from alarm_configurator.settings.alarm_config import AlarmConfig
+from inout_configurator.config import TE5Config
+from alarm_configurator.config import AlarmConfig
 
 # Абсолютные импорты парсеров
-from inout_configurator.parsers.te5_parser import TE5Parser
-from alarm_configurator.parsers.alarm_parser import AlarmParser
+from inout_configurator.parser import TE5Parser
+from alarm_configurator.parser import AlarmParser
 
 # Перенаправленные импорты модулей документации
 from alarm_configurator.documentation.document_updater import update_configurator_document
@@ -270,8 +270,8 @@ if current_file_dir and os.path.exists(current_file_dir):
                     
                     # --- БЛОК ОБНОВЛЕНИЯ ТЕКСТОВ ---
                     if (is_ok or force) and do_translation and selected_xml_path and getattr(config_class, 'SUPPORT_TEXT_UPDATE', False):
-                        from parsers.xml_parser import build_xml_cache
-                        from documentation.condition_translator import translate_condition
+                        from shared.parsers.xml_parser import build_xml_cache
+                        from shared.documentation.condition_translator import translate_condition
                         
                         add_log(f"📝 Перевод кода в текст с использованием XML-кэша...")
                         xml_cache = build_xml_cache(selected_xml_path, target_configs=ctrls, logger=add_log)

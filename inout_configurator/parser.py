@@ -3,8 +3,8 @@ import openpyxl
 import os
 import datetime
 import re
-from .base_parser import BaseParser
-import models
+from shared.parsers.base_parser import BaseParser
+import inout_configurator.models as models
 
 class TE5Parser(BaseParser):
     def __init__(self, *args, **kwargs):

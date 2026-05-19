@@ -1,4 +1,4 @@
-from settings import AppConfig
+from application.settings.app_config import AppConfig
 
 class TE5Config(AppConfig):
     """Настройки, специфичные ТОЛЬКО для конфигуратора ТЭ5"""

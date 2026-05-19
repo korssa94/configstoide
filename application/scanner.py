@@ -1,5 +1,5 @@
 import os
-from settings import AppConfig
+from application.settings.app_config import AppConfig
 import pandas as pd
 
 def find_plcopen_xmls(project_path):

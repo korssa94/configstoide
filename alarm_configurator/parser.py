@@ -4,12 +4,12 @@ import os
 import re
 import streamlit as st
 import datetime
-from .base_parser import BaseParser
-from models.alarms.talr import Talr
-from models.alarms.tppu import Tppu
-from models.alarms.tcrs import Tcrs
-from settings.te5_config import TE5Config 
-from settings.app_config import AppConfig
+from shared.parsers.base_parser import BaseParser
+from alarm_configurator.models.talr import Talr
+from alarm_configurator.models.tppu import Tppu
+from alarm_configurator.models.tcrs import Tcrs
+from inout_configurator.config import TE5Config 
+from application.settings.app_config import AppConfig
 
 class AlarmParser(BaseParser):
     def __init__(self, *args, **kwargs):

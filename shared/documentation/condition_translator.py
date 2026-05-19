@@ -1,5 +1,5 @@
 import re
-from settings.translation_rules import TRANSLATION_RULES
+from shared.settings.translation_rules import TRANSLATION_RULES
 
 def get_rule(code_str):
     """Возвращает перевод по правилу или саму строку, если правила нет"""

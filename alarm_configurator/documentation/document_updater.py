@@ -1,7 +1,7 @@
 import win32com.client
 import pythoncom
 import os
-from settings import AppConfig
+from application.settings.app_config import AppConfig
 from application.settings_manager import load_settings
 
 def update_configurator_document(filepath, parsed_objects, config_class, logger):

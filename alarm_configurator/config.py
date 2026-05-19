@@ -1,5 +1,4 @@
-# settings/alarm_config.py
-from settings import AppConfig
+from application.settings.app_config import AppConfig
 
 class AlarmConfig(AppConfig):
     """Настройки конфигуратора Сигнализаций"""
