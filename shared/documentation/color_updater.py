@@ -1,5 +1,6 @@
 import xlwings as xw
 import os
+from shared.documentation.excel_utils import fix_print_settings
 
 def update_configurator_colors(filepath, rows_to_color, config_class, logger):
     """
@@ -78,6 +79,8 @@ def update_configurator_colors(filepath, rows_to_color, config_class, logger):
         if is_background:
             wb.save()
             wb.close()
+            # А теперь чистим имена
+            fix_print_settings(filepath, logger)
             app.quit()
             logger(f"💾 Фоновый процесс завершен, {filename} сохранен.", "INFO")
         else:

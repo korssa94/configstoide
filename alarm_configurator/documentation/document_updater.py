@@ -3,6 +3,7 @@ import pythoncom
 import os
 from application.settings.app_config import AppConfig
 from application.settings_manager import load_settings
+from shared.documentation.excel_utils import repair_and_cleanup_file, fix_print_settings
 
 def update_configurator_document(filepath, parsed_objects, config_class, logger):
     """Универсально заполняет лист 'Документ' данными и вызывает макрос форматирования из надстройки"""
@@ -10,7 +11,10 @@ def update_configurator_document(filepath, parsed_objects, config_class, logger)
     pythoncom.CoInitialize()
     excel = None
     wb = None
-    
+
+    # Сначала лечим файл!
+    repair_and_cleanup_file(filepath, logger)
+
     try:
         filename = os.path.basename(filepath)
         is_background = False
@@ -23,6 +27,14 @@ def update_configurator_document(filepath, parsed_objects, config_class, logger)
             excel = win32com.client.Dispatch("Excel.Application")
             is_background = True
             logger(f"📁 Открыли {filename} в фоновом режиме для сборки Документа", "INFO")
+
+        # Глушим любые всплывающие окна Excel (предупреждения, восстановление файлов)
+        # и отключаем автоматическое выполнение макросов при открытии (Workbook_Open)
+        try:
+            excel.DisplayAlerts = False
+            excel.EnableEvents = False
+        except Exception as e:
+            logger(f"Не удалось настроить параметры среды Excel: {e}", "WARNING")
 
         if not is_background:
             try:
@@ -203,7 +215,7 @@ def update_configurator_document(filepath, parsed_objects, config_class, logger)
             logger("Макрос успешно выполнен!", "INFO")
         except Exception as macro_e:
             logger(f"❌ Не удалось выполнить макрос {macro_name} из {addon_filename}: {str(macro_e)}", "WARNING")
-        
+
         # Возвращаем обновление экрана и сохраняем файл
         if is_background:
             wb.Save()

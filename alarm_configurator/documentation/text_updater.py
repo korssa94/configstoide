@@ -1,5 +1,6 @@
 import xlwings as xw
 import os
+from shared.documentation.excel_utils import fix_print_settings
 
 def update_configurator_texts(filepath, parsed_objects, config_class, logger):
     """
