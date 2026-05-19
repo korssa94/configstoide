@@ -3,8 +3,8 @@ import sys
 import os
 
 # --- БЛОК ОЧИСТКИ КЭША ---
-# Добавили "application" в список очистки, чтобы Streamlit видел изменения в наших новых файлах
-project_modules = [m for m in sys.modules if any(k in m for k in ["parsers", "models", "settings", "application"])]
+# Настраиваем очистку под новые имена доменных пакетов
+project_modules = [m for m in sys.modules if any(k in m for k in ["alarm_configurator", "inout_configurator", "shared", "application"])]
 for module in project_modules:
     del sys.modules[module]
 
@@ -12,11 +12,20 @@ import streamlit as st
 import openpyxl
 import re
 import urllib.parse
-from settings import AppConfig, TE5Config, AlarmConfig
-from parsers import TE5Parser, AlarmParser
-from documentation.document_updater import update_configurator_document
-from documentation.text_updater import update_configurator_texts
-from documentation.color_updater import update_configurator_colors
+
+# Абсолютные импорты настроек
+from application.settings.app_config import AppConfig
+from inout_configurator.settings.te5_config import TE5Config
+from alarm_configurator.settings.alarm_config import AlarmConfig
+
+# Абсолютные импорты парсеров
+from inout_configurator.parsers.te5_parser import TE5Parser
+from alarm_configurator.parsers.alarm_parser import AlarmParser
+
+# Перенаправленные импорты модулей документации
+from alarm_configurator.documentation.document_updater import update_configurator_document
+from alarm_configurator.documentation.text_updater import update_configurator_texts
+from shared.documentation.color_updater import update_configurator_colors
 
 # Импорты из нашей новой архитектуры
 from application.scanner import find_plcopen_xmls
