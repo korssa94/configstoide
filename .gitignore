@@ -1,0 +1,24 @@
+# --- Python & IDE ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+.vscode/
+.idea/
+
+# --- Streamlit ---
+.streamlit/config.toml
+.streamlit/secrets.toml
+
+# --- Временные файлы Excel (КРИТИЧЕСКИ ВАЖНО!) ---
+# Игнорируем временные файлы, которые Excel создает при открытии книг
+~$*
+**/~$*
+._*
+
+# --- Системный мусор ---
+.DS_Store
+Thumbs.db
+user_settings.json
