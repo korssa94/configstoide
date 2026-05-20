@@ -209,7 +209,18 @@ if current_file_dir and os.path.exists(current_file_dir):
             
             master_map = load_master_map(master_file)
 
+            seen_basenames = set()
             for fp in selected_files:
+                bn = os.path.basename(fp)
+                if bn in seen_basenames:
+                    add_log(
+                        f"⚠️ Пропуск дубликата: файл '{bn}' уже обработан под другим путём — '{fp}'. "
+                        f"Возможно, такая же копия лежит в нескольких подкаталогах.",
+                        level="WARNING"
+                    )
+                    continue
+                seen_basenames.add(bn)
+
                 try:
                     result = process_configurator(
                         fp, master_map, CONFIG_REGISTRY,
