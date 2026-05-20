@@ -5,6 +5,7 @@ import re
 import tempfile
 import openpyxl
 import xlwings as xw
+from contextlib import contextmanager
 
 def repair_and_cleanup_file(filepath, logger):
     """
@@ -113,3 +114,76 @@ def fix_print_settings(file_path, logger):
     finally:
         if app:
             app.quit()
+
+@contextmanager
+def seamless_excel(filepath, logger, print_area_mode=None):
+    """Универсальный контекст: открыть (или найти) книгу, заморозить экран,
+    восстановить фокус после работы, сохранить, закрыть если сами открыли.
+
+    print_area_mode (срабатывает ТОЛЬКО при фоновом открытии):
+        None    — не трогать области печати
+        "wipe"  — выжечь Print_Area/Print_Titles из XML ДО открытия
+                  (для конфигураторов, где область печати создаётся макросом, например ТБ51)
+        "fix"   — переименовать Print_Area → Область_печати ПОСЛЕ закрытия
+                  (для конфигураторов с готовыми областями печати, например ТЭ5)
+    """
+    app = None
+    wb = None
+    original_wb_name = None
+    is_background = False
+
+    try:
+        filename = os.path.basename(filepath)
+        try:
+            wb = xw.books[filename]
+            app = wb.app
+        except Exception:
+            app = xw.App(visible=False)
+            wb = None
+            is_background = True
+
+        # Запоминаем активную книгу и замораживаем экран ДО любых Activate
+        try:
+            original_wb_name = app.api.ActiveWorkbook.Name
+            app.screen_updating = False
+        except Exception:
+            pass
+
+        if wb is None:  # файл не был открыт — открываем (выжигаем XML, если попросили)
+            if print_area_mode == "wipe":
+                repair_and_cleanup_file(filepath, logger)
+            wb = app.books.open(filepath)
+            logger(f"📁 Открыли {filename} в фоновом режиме", "INFO")
+        else:
+            logger(f"🔗 Подключились к уже открытому {filename}", "INFO")
+
+        yield app, wb, is_background
+
+        wb.save()
+
+    finally:
+        if app:
+            # Возвращаем фокус на исходную книгу, пока экран ещё заморожен
+            if original_wb_name:
+                try:
+                    app.books[original_wb_name].activate()
+                except Exception:
+                    pass
+            try:
+                app.screen_updating = True
+            except Exception:
+                pass
+            if is_background:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+                try:
+                    app.quit()
+                except Exception:
+                    pass
+                logger(f"💾 Фоновый процесс завершён, {os.path.basename(filepath)} сохранён.", "INFO")
+
+                # Аккуратное переименование Print_Area → Область_печати после закрытия
+                if print_area_mode == "fix":
+                    fix_print_settings(filepath, logger)
