@@ -1,7 +1,7 @@
 # app.py
 import sys
 import os
-
+import datetime
 # --- БЛОК ОЧИСТКИ КЭША ---
 # Настраиваем очистку под новые имена доменных пакетов
 project_modules = [m for m in sys.modules if any(k in m for k in ["alarm_configurator", "inout_configurator", "shared", "application"])]
@@ -23,7 +23,7 @@ from alarm_configurator.parser import AlarmParser
 # Импорты из новой архитектуры
 from application.scanner import find_plcopen_xmls, find_master_and_targets
 from application.settings_manager import load_settings, save_settings, sync_addon_path, on_checkbox_change
-from application.logger import add_log, render_logs
+from application.logger import add_log, prepare_log_placeholder, finish_logging
 from application.master_loader import load_master_map
 from application.processor import process_configurator
 
@@ -75,6 +75,8 @@ if 'process_step' not in st.session_state: st.session_state.process_step = None
 if 'ms_counter' not in st.session_state: st.session_state.ms_counter = 0
 if 'current_selection' not in st.session_state: st.session_state.current_selection = []
 if 'selection_initialized' not in st.session_state: st.session_state.selection_initialized = False
+# Сбрасываем live-плейсхолдер на каждом rerun'е (он живёт только в рамках одного запуска скрипта)
+st.session_state.log_placeholder = None
 
 target_file_from_excel = st.query_params.get("target_file")
 skip_paint_global = bool(target_file_from_excel)
@@ -163,31 +165,43 @@ if current_file_dir and os.path.exists(current_file_dir):
 
         # --- КНОПКА ЗАПУСКА ---
         if st.button("🔍 Запустить процесс", type="primary") or (target_file_from_excel and not st.session_state.analyzed):
+            st.session_state.logs = [] # ЖЕСТКО ОБНУЛЯЕМ СТАРЫЙ ЛОГ В МОМЕНТ КЛИКА
             st.session_state.process_step = "analyze"
             st.session_state.analyzed = True
             
+        # --- ЛОГ: фиксированная позиция на странице ---
+        prepare_log_placeholder()
+
         # --- БЛОК ОЖИДАНИЯ РЕШЕНИЯ ---
-        if st.session_state.process_step == "awaiting_confirm":
-            st.error(f"❌ Найдено ошибок: {len(st.session_state.file_errors)}. Генерация приостановлена!")
-            col_btn1, col_btn2 = st.columns(2) 
-            with col_btn1:
-                if st.button("⚠️ Всё равно создать (без ошибочных)", type="primary", use_container_width=True):
-                    st.session_state.process_step = "generate_forced"
-                    st.rerun()
-            with col_btn2:
-                if st.button("🛑 Отменить генерацию", use_container_width=True):
-                    st.session_state.process_step = "done"
-                    add_log("🛑 Генерация отменена пользователем.", level="ERROR")
-                    st.rerun()
+        # Резервируем выделенный слот под аварийный интерфейс
+        confirm_placeholder = st.empty()
         
+        if st.session_state.process_step == "awaiting_confirm":
+            with confirm_placeholder.container():
+                st.error(f"❌ Найдено ошибок: {len(st.session_state.file_errors)}. Генерация приостановлена!")
+                col_btn1, col_btn2 = st.columns(2) 
+                with col_btn1:
+                    if st.button("⚠️ Всё равно создать (без ошибочных)", type="primary", use_container_width=True):
+                        st.session_state.process_step = "generate_forced"
+                        st.rerun()
+                with col_btn2:
+                    if st.button("🛑 Отменить генерацию", use_container_width=True):
+                        st.session_state.process_step = "done"
+                        add_log("🛑 Генерация отменена пользователем.", level="ERROR")
+                        st.rerun()
+        else:
+            # КРИТИЧНО: Принудительно выжигаем старые кнопки из DOM
+            confirm_placeholder.empty()
+
         # --- ОСНОВНАЯ ЛОГИКА ---
         if st.session_state.process_step in ["analyze", "generate_forced"]:
             force = (st.session_state.process_step == "generate_forced")
-            
+
             if not force:
-                st.session_state.logs = []
                 st.session_state.failed_rows_cache = {} # Очищаем кэш ошибочных строк перед каждым новым анализом
-                add_log("🚀 Старт процесса генерации")
+                # Проверяем, если список пустой (значит кнопка только что нажата), пишем старт
+                if not st.session_state.logs:
+                    add_log("🚀 Старт процесса генерации")
             else:
                 add_log("🚀 Принудительная генерация (ошибочные сигналы исключены)")
                 
@@ -235,8 +249,7 @@ if current_file_dir and os.path.exists(current_file_dir):
                     add_log(f"✨ Процесс завершен! Файлов создано: {len(st.session_state.files_to_write)}")
                 st.session_state.process_step = "done"
 
-    # Вызов нашей вынесенной функции для отрисовки логов
-    render_logs()
+        finish_logging()
 
     from application.logger import render_xml_inspector
     render_xml_inspector()
