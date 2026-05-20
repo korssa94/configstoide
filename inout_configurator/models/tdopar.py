@@ -1,4 +1,3 @@
-# models/tdopar.py
 import json
 import re
 
@@ -124,13 +123,16 @@ class Tdopar:
                 ch_idx = 0
             mod_name = f"MODULE_{self.device}_{self.crate}_{self.module}"
 
+        # ОПРЕДЕЛЯЕМ ЦЕЛЕВОЕ ПОЛЕ: Для частотных модулей DA используем OUT вместо VALUE
+        val_field = "OUT" if "DA" in self.module_type else "VALUE"
+
         if not mod_name:
             return f"dopar.{self.alg_name}(); //{self.description}"
         elif self.paz:
             return f"dopar.{self.alg_name}(mdl_valid := {mod_name}.CH{ch_num}.7, mdl_hwError := {mod_name}.HwError, mdl_safe_state := NOT {mod_name}.FAIL_SAFE_STATE, value := {mod_name}.CH{ch_num}.0); //{self.description}"
         elif self.circuit_control == "1":
-            return f"dopar.{self.alg_name}(kc_di := dipar.kcdo_{self.alg_name}.value, mdl_hwError := {mod_name}.HwError, mdl_value => {mod_name}.VALUE.{ch_idx}); //{self.description}"
+            return f"dopar.{self.alg_name}(kc_di := dipar.kcdo_{self.alg_name}.value, mdl_hwError := {mod_name}.HwError, mdl_value => {mod_name}.{val_field}.{ch_idx}); //{self.description}"
         elif self.circuit_control == "2":
-            return f"dopar.{self.alg_name}(kc_ai := aipar.kcdo_{self.alg_name}.value, mdl_hwError := {mod_name}.HwError, mdl_value => {mod_name}.VALUE.{ch_idx}); //{self.description}"
+            return f"dopar.{self.alg_name}(kc_ai := aipar.kcdo_{self.alg_name}.value, mdl_hwError := {mod_name}.HwError, mdl_value => {mod_name}.{val_field}.{ch_idx}); //{self.description}"
         else: # "0" или пустое
-            return f"dopar.{self.alg_name}(mdl_hwError := {mod_name}.HwError, mdl_value => {mod_name}.VALUE.{ch_idx}); //{self.description}"
+            return f"dopar.{self.alg_name}(mdl_hwError := {mod_name}.HwError, mdl_value => {mod_name}.{val_field}.{ch_idx}); //{self.description}"
