@@ -75,11 +75,6 @@ class TE5Parser(BaseParser):
                     else:
                         self.log(f'Класс модели {model_name} не найден в коде!', level="ERROR")
 
-            all_known_sheets = [self.config.SHEET_AI, self.config.SHEET_AO, self.config.SHEET_DI, self.config.SHEET_DO, self.config.SHEET_FPL]
-            for other in all_known_sheets:
-                if other in wb_data.sheetnames and other not in processed_sheets:
-                    if not force: self.log(f'Лист "{other}" найден, но не обрабатывается текущей версией.', level="INFO")
-
             # --- ПЕРЕКРЕСТНЫЕ ПРОВЕРКИ ---
             self._cross_validate(force, clean_name, all_stats)
 
@@ -114,20 +109,20 @@ class TE5Parser(BaseParser):
                     c = all_stats[model_name]["created"]
                     s = all_stats[model_name]["skipped"]
                     excl_list = all_stats[model_name]["exclusions"]
-                    
+
                     # 1. Печатаем итоги по листу
                     msg = f'Лист "{s_name}": создано {c} сигналов'
                     if s > 0:
                         msg += f', пропущено {s} из-за ошибок в конфигурации'
                     self.log(f"{msg}.")
-                    
+
                     # 2. Сразу под итогами выводим список "выживших из ума" параметров :)
                     if force and excl_list:
                         for warn_msg in excl_list:
                             self.log(warn_msg, level="WARNING")
 
-                    # Генерируем subsystem.gvl для всех контроллеров[cite: 8]
-                    self.generate_subsystems_gvl(valid_subsystems, "входов/выходов")
+            # Генерируем subsystem.gvl для всех контроллеров (один раз, а не на каждой модели)
+            self.generate_subsystems_gvl(valid_subsystems, "входов/выходов")
 
             self._generate_files(algo_folder)
             return True
@@ -306,126 +301,82 @@ class TE5Parser(BaseParser):
                 self.files_to_write.append({"path": os.path.join(tdir, "reset_io_var_stat.st"), "text": reset_txt})
     
     def _cross_validate(self, force, clean_name, all_stats):
-        """Выполняет перекрестные проверки между уже собранными листами."""
-        # Собираем множества имен входов для сверхбыстрого поиска (O(1))
-        taipar_names = {obj.alg_name for obj in self.objects.get("Taipar", [])}
-        tdipar_names = {obj.alg_name for obj in self.objects.get("Tdipar", [])}
-        
-        # --- Проверка 1: Taopar (Аналоговые выходы) ---
-        if "Taopar" in self.objects:
-            valid_taopars = []
-            for obj in self.objects["Taopar"]:
-                is_valid = True
-                msg = ""
-                
-                if obj.circuit_control == "1":
-                    expected_name = f"kcdi_{obj.alg_name}"
-                    if expected_name not in tdipar_names:
-                        msg = f"Отсутствует параметр контроля цепи '{expected_name}' на листе Вх.Д сигн."
-                        is_valid = False
-                elif obj.circuit_control == "2":
-                    expected_name = f"kcao_{obj.alg_name}"
-                    if expected_name not in taipar_names:
-                        msg = f"Отсутствует параметр контроля цепи '{expected_name}' на листе Вх.А сигн."
-                        is_valid = False
-                        
-                if not is_valid:
-                    self.errors.append({"Файл": clean_name, "Строка": obj.row_number, "Имя": obj.alg_name, "Ошибка": f"Кросс-чек: {msg}"})
-                    if not force:
-                        if "Taopar" in all_stats:
-                            all_stats["Taopar"]["errors"].append(f"Строка {obj.row_number} [{obj.alg_name or '---'}]: Перекрестная проверка: {msg}")
-                    else:
-                        # Вместо лога добавляем текст в список exclusions
-                        if "Taopar" in all_stats:
-                            all_stats["Taopar"]["exclusions"].append(
-                                f"Переменная со строки {obj.row_number}, наименованием '{obj.description or '---'}', алг. именем '{obj.alg_name or '---'}' исключена из генерации (провал перекрестной проверки)"
-                            )
-                    
-                    # <-- Корректируем финальную статистику
-                    if "Taopar" in all_stats:
-                        all_stats["Taopar"]["created"] -= 1
-                        all_stats["Taopar"]["skipped"] += 1
-                        
-                # Если всё ок ИЛИ мы в режиме анализа (force=False, всё равно остановимся), сохраняем объект
-                if is_valid or not force:
-                    valid_taopars.append(obj)
-                    
-            # При принудительной генерации перезаписываем список, отсеивая бракованные
-            if force:
-                self.objects["Taopar"] = valid_taopars
+        """Выполняет перекрестные проверки между уже собранными листами.
 
-        # --- Проверка 2: Tdipar (Дискретные входы) ---
-        if "Tdipar" in self.objects:
-            valid_tdipars = []
-            for obj in self.objects["Tdipar"]:
-                is_valid = True
-                msg = ""
-                
-                # Проверяем наличие цифры 3 (приводим к строке на всякий случай)
-                if str(obj.circuit_control).strip() == "3":
-                    expected_name = f"kcdi_{obj.alg_name}"
-                    # tdipar_names мы уже собрали в самом начале метода!
-                    if expected_name not in tdipar_names:
-                        msg = f"Отсутствует параметр контроля цепи '{expected_name}' на текущем листе (Вх.Д сигн.)"
-                        is_valid = False
-                        
-                if not is_valid:
-                    self.errors.append({"Файл": clean_name, "Строка": obj.row_number, "Имя": obj.alg_name, "Ошибка": f"Кросс-чек: {msg}"})
-                    if not force:
-                        if "Tdipar" in all_stats:
-                            all_stats["Tdipar"]["errors"].append(f"Строка {obj.row_number} [{obj.alg_name or '---'}]: Перекрестная проверка: {msg}")
-                    else:
-                        if "Tdipar" in all_stats:
-                            all_stats["Tdipar"]["exclusions"].append(
-                                f"Переменная со строки {obj.row_number}, наименованием '{obj.description or '---'}', алг. именем '{obj.alg_name or '---'}' исключена из генерации (провал перекрестной проверки)"
-                            )
-                    
-                    if "Tdipar" in all_stats:
-                        all_stats["Tdipar"]["created"] -= 1
-                        all_stats["Tdipar"]["skipped"] += 1
-                        
-                if is_valid or not force:
-                    valid_tdipars.append(obj)
-                    
-            if force:
-                self.objects["Tdipar"] = valid_tdipars
+        Каждый объект проверяется одним правилом — определяемым по значению
+        circuit_control. Правила описаны декларативной таблицей CROSS_CHECKS.
+        """
+        lookups = {
+            "taipar_names": {obj.alg_name for obj in self.objects.get("Taipar", [])},
+            "tdipar_names": {obj.alg_name for obj in self.objects.get("Tdipar", [])},
+        }
 
-        # --- Проверка 3: Tdopar (Дискретные выходы) ---
-        if "Tdopar" in self.objects:
-            valid_tdopars = []
-            for obj in self.objects["Tdopar"]:
+        # Декларативные правила кросс-проверки:
+        # модель → список (триггер_circuit_control, префикс_имени_контроля, lookup, лист_для_сообщения)
+        cross_checks_by_model = {
+            "Taopar": [
+                ("1", "kcdi_", "tdipar_names", "Вх.Д сигн."),
+                ("2", "kcao_", "taipar_names", "Вх.А сигн."),
+            ],
+            "Tdipar": [
+                ("3", "kcdi_", "tdipar_names", "Вх.Д сигн."),
+            ],
+            "Tdopar": [
+                ("1", "kcdo_", "tdipar_names", "Вх.Д сигн."),
+                ("2", "kcdo_", "taipar_names", "Вх.А сигн."),
+            ],
+        }
+
+        for model_name, rules in cross_checks_by_model.items():
+            if model_name not in self.objects:
+                continue
+
+            valid_objects = []
+            for obj in self.objects[model_name]:
                 is_valid = True
-                msg = ""
-                
-                # Аналогично Taopar, проверяем 1 (Вх.Д) и 2 (Вх.А)
-                if str(obj.circuit_control).strip() == "1":
-                    expected_name = f"kcdo_{obj.alg_name}"
-                    if expected_name not in tdipar_names:
-                        msg = f"Отсутствует параметр контроля цепи '{expected_name}' на листе Вх.Д сигн."
+                cc = str(obj.circuit_control).strip()
+
+                # На объект может сработать ровно одно правило — триггеры взаимоисключающие
+                for trigger, prefix, lookup_key, sheet_label in rules:
+                    if cc != trigger:
+                        continue
+                    expected_name = f"{prefix}{obj.alg_name}"
+                    if expected_name not in lookups[lookup_key]:
+                        msg = f"Отсутствует параметр контроля цепи '{expected_name}' на листе {sheet_label}."
+                        self._record_cross_validation_error(
+                            model_name, obj, msg, clean_name, force, all_stats
+                        )
                         is_valid = False
-                elif str(obj.circuit_control).strip() == "2":
-                    expected_name = f"kcdo_{obj.alg_name}"
-                    if expected_name not in taipar_names:
-                        msg = f"Отсутствует параметр контроля цепи '{expected_name}' на листе Вх.А сигн."
-                        is_valid = False
-                        
-                if not is_valid:
-                    self.errors.append({"Файл": clean_name, "Строка": obj.row_number, "Имя": obj.alg_name, "Ошибка": f"Кросс-чек: {msg}"})
-                    if not force:
-                        if "Tdopar" in all_stats:
-                            all_stats["Tdopar"]["errors"].append(f"Строка {obj.row_number} [{obj.alg_name or '---'}]: Перекрестная проверка: {msg}")
-                    else:
-                        if "Tdopar" in all_stats:
-                            all_stats["Tdopar"]["exclusions"].append(
-                                f"Переменная со строки {obj.row_number}, наименованием '{obj.description or '---'}', алг. именем '{obj.alg_name or '---'}' исключена из генерации (провал перекрестной проверки)"
-                            )
-                    
-                    if "Tdopar" in all_stats:
-                        all_stats["Tdopar"]["created"] -= 1
-                        all_stats["Tdopar"]["skipped"] += 1
-                        
+                    break
+
                 if is_valid or not force:
-                    valid_tdopars.append(obj)
-                    
+                    valid_objects.append(obj)
+
+            # При force-режиме отсеиваем бракованные объекты из self.objects
             if force:
-                self.objects["Tdopar"] = valid_tdopars
+                self.objects[model_name] = valid_objects
+
+    def _record_cross_validation_error(self, model_name, obj, msg, clean_name, force, all_stats):
+        """Регистрирует ошибку кросс-проверки: в self.errors, в логе листа, корректирует статистику."""
+        self.errors.append({
+            "Файл": clean_name,
+            "Строка": obj.row_number,
+            "Имя": obj.alg_name,
+            "Ошибка": f"Кросс-чек: {msg}"
+        })
+
+        if model_name not in all_stats:
+            return
+
+        if not force:
+            all_stats[model_name]["errors"].append(
+                f"Строка {obj.row_number} [{obj.alg_name or '---'}]: Перекрестная проверка: {msg}"
+            )
+        else:
+            all_stats[model_name]["exclusions"].append(
+                f"Переменная со строки {obj.row_number}, наименованием '{obj.description or '---'}', "
+                f"алг. именем '{obj.alg_name or '---'}' исключена из генерации (провал перекрестной проверки)"
+            )
+
+        all_stats[model_name]["created"] -= 1
+        all_stats[model_name]["skipped"] += 1
