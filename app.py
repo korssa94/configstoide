@@ -9,8 +9,6 @@ for module in project_modules:
     del sys.modules[module]
 
 import streamlit as st
-import openpyxl
-import re
 import urllib.parse
 
 # Абсолютные импорты настроек
@@ -22,15 +20,12 @@ from alarm_configurator.config import AlarmConfig
 from inout_configurator.parser import TE5Parser
 from alarm_configurator.parser import AlarmParser
 
-# Перенаправленные импорты модулей документации
-from alarm_configurator.documentation.document_updater import update_configurator_document
-from alarm_configurator.documentation.text_updater import update_configurator_texts
-from shared.documentation.color_updater import update_configurator_colors
-
-# Импорты из нашей новой архитектуры
-from application.scanner import find_plcopen_xmls
+# Импорты из новой архитектуры
+from application.scanner import find_plcopen_xmls, find_master_and_targets
 from application.settings_manager import load_settings, save_settings, sync_addon_path, on_checkbox_change
 from application.logger import add_log, render_logs
+from application.master_loader import load_master_map
+from application.processor import process_configurator
 
 CONFIG_REGISTRY = {
     "TE5": {"config": TE5Config, "parser": TE5Parser},
@@ -96,37 +91,9 @@ else:
     current_file_dir = new_dir
 
 if current_file_dir and os.path.exists(current_file_dir):
-    target_files = []
-    master_file = None
-    project_root = None 
-    check_dir = current_file_dir
-    
-    while True:
-        folder_name = os.path.basename(check_dir).lower()
-        potential_masters = [os.path.join(check_dir, f) for f in os.listdir(check_dir) if AppConfig.KEYWORD_MASTER in f and f.endswith(('.xlsx', '.xlsm')) and not f.startswith('~$')]
-        if potential_masters and master_file is None: master_file = potential_masters[0]
-        if folder_name in ["config", "configs"]:
-            project_root = check_dir
-            break
-        parent = os.path.dirname(check_dir)
-        if parent == check_dir: break
-        check_dir = parent
-        
-    final_root = project_root if project_root else (os.path.dirname(master_file) if master_file else current_file_dir)
-
-    active_keywords = []
-    for v in CONFIG_REGISTRY.values():
-        kw = v["config"].KEYWORD_FILE
-        if isinstance(kw, list):
-            active_keywords.extend(kw)
-        else:
-            active_keywords.append(kw)
-
-    for root, dirs, files in os.walk(current_file_dir):
-        for f in files:
-            if f.startswith('~$') or not f.endswith(('.xlsx', '.xlsm')): continue
-            if any(k in f for k in active_keywords):
-                target_files.append(os.path.join(root, f))
+    target_files, master_file, _, final_root = find_master_and_targets(
+        current_file_dir, CONFIG_REGISTRY, AppConfig.KEYWORD_MASTER
+    )
 
     if not master_file:
         st.error(f"❌ Мастер-конфигуратор не найден!")
@@ -227,90 +194,34 @@ if current_file_dir and os.path.exists(current_file_dir):
             st.session_state.file_errors = []
             st.session_state.files_to_write = []
             
-            wb_master = openpyxl.load_workbook(master_file, data_only=True)
-            ws_m = wb_master.active
-            master_map = {}
-            plc_headers = []
-            plc_col_indices = []
-
-            for row_idx, row in enumerate(ws_m.iter_rows(values_only=True)):
-                if row and str(row[0]).strip() == "Контроллер":
-                    plc_headers = row
-                    plc_col_indices = [i for i, val in enumerate(row) if i > 0 and val]
-                    break
-
-            for row in ws_m.iter_rows(values_only=True):
-                if not row or str(row[0]).strip() == "Контроллер": continue
-                for idx in plc_col_indices:
-                    raw_val = row[idx]
-                    if raw_val and str(raw_val).strip() != "None":
-                        f_name = str(raw_val).strip()
-                        p_name = str(plc_headers[idx]).strip()
-                        if f_name not in master_map: master_map[f_name] = []
-                        if p_name not in master_map[f_name]: master_map[f_name].append(p_name)
+            master_map = load_master_map(master_file)
 
             for fp in selected_files:
-                file_name = os.path.basename(fp)
-                clean_n = re.sub(r'\s+v\d+\.\d+\.\d+.*$', '', os.path.splitext(file_name)[0]).strip()
-                file_type = next((k for k, v in CONFIG_REGISTRY.items() if (any(kw in file_name for kw in v["config"].KEYWORD_FILE) if isinstance(v["config"].KEYWORD_FILE, list) else v["config"].KEYWORD_FILE in file_name)), None)
-                if not file_type: continue
-                
-                ctrls = master_map.get(clean_n, [])
-                if not force: add_log(f"📂 Анализ: {clean_n} (ПЛК: {len(ctrls)})")
-                
-                if ctrls:
-                    parser_class = CONFIG_REGISTRY[file_type]["parser"]
-                    config_class = CONFIG_REGISTRY[file_type]["config"]
-                    parser = parser_class(fp, final_root, ctrls, config_class, logger=add_log)
-                    
-                    # Прокидываем путь к Мастеру внутрь парсера для кросс-проверок
-                    parser.master_file = master_file 
-                    
-                    is_ok = parser.parse(clean_n, user_settings.get("validations", {}).get(file_type, {}), force=force)
-                    
-                    # --- БЛОК ОБНОВЛЕНИЯ ТЕКСТОВ ---
-                    if (is_ok or force) and do_translation and selected_xml_path and getattr(config_class, 'SUPPORT_TEXT_UPDATE', False):
-                        from shared.parsers.xml_parser import build_xml_cache
-                        from shared.documentation.condition_translator import translate_condition
-                        
-                        add_log(f"📝 Перевод кода в текст с использованием XML-кэша...")
-                        xml_cache = build_xml_cache(selected_xml_path, target_configs=ctrls, logger=add_log)
-                        st.session_state.xml_cache = xml_cache
-                        
-                        parsed_objects = getattr(parser, 'all_parsed_objects', [])
-                        
-                        for obj in parsed_objects:
-                            if hasattr(obj, 'trigger_cond') and obj.trigger_cond:
-                                obj.trigger_text = translate_condition(obj.trigger_cond, xml_cache)
-                            if hasattr(obj, 'fault_cond') and obj.fault_cond:
-                                obj.fault_text = translate_condition(obj.fault_cond, xml_cache)
-                            if hasattr(obj, 'set_code') and obj.set_code:
-                                obj.set_text = translate_condition(obj.set_code, xml_cache)
-                            if hasattr(obj, 'reset_code') and obj.reset_code:
-                                obj.reset_text = translate_condition(obj.reset_code, xml_cache)
-                                
-                        add_log(f"✍️ Обновление текстовых описаний в конфигураторе...", "INFO")
-                        update_configurator_texts(fp, parsed_objects, config_class, add_log)
-                    # ------------------------------------------------
+                result = process_configurator(
+                    fp, master_map, CONFIG_REGISTRY,
+                    options={
+                        'do_translation': do_translation,
+                        'do_document': do_document,
+                        'do_coloring': do_coloring,
+                    },
+                    master_file=master_file,
+                    final_root=final_root,
+                    selected_xml_path=selected_xml_path,
+                    validations=user_settings.get("validations", {}),
+                    logger=add_log,
+                    force=force,
+                )
+                if result is None:
+                    continue
 
-                    # --- БЛОК ОБНОВЛЕНИЯ ДОКУМЕНТА (xlwings) ---
-                    if (is_ok or force) and do_document and getattr(config_class, 'SUPPORT_DOC_UPDATE', False):
-                        add_log(f"Обновление документа {clean_n}...", "INFO")
-                        parsed_objects = getattr(parser, 'all_parsed_objects', [])
-                        update_configurator_document(fp, parsed_objects, config_class, add_log)
-                    # ------------------------------------------------
+                parser, xml_cache, is_ok = result
 
-                    # --- БЛОК ПОКРАСКИ ЯЧЕЕК (xlwings) ---
-                    if (is_ok or force) and do_coloring and getattr(config_class, 'SUPPORT_COLOR_UPDATE', False):
-                        add_log(f"🎨 Анализ и обновление цветов ячеек...", "INFO")
-                        # Передаем карту покраски, которую сформировал парсер
-                        rows_to_color = getattr(parser, 'rows_to_color', {})
-                        update_configurator_colors(fp, rows_to_color, config_class, add_log)
-                    # ------------------------------------------------
+                if xml_cache:
+                    st.session_state.xml_cache = xml_cache
 
-                    st.session_state.file_errors.extend(parser.errors)
-                    if (is_ok or force) and do_sources:
-                        st.session_state.files_to_write.extend(parser.files_to_write)
+                st.session_state.file_errors.extend(parser.errors)
+                if (is_ok or force) and do_sources:
+                    st.session_state.files_to_write.extend(parser.files_to_write)
 
             if st.session_state.file_errors and not force:
                 st.session_state.process_step = "awaiting_confirm"
