@@ -158,10 +158,9 @@ if current_file_dir and os.path.exists(current_file_dir):
                 )
                 selected_xml_path = xml_options[selected_label]
             else:
-                st.warning(f"⚠️ Файлы .plcopen.xml не найдены в подпапках {AppConfig.SOURCE_EXPORT_FOLDER}")
+                st.warning(f"⚠️ Обновление текстового описания пропущено: plcopen.xml не найден.")
                 with st.expander("🛠 Дебаг поиска"):
                     for line in debug_info: st.text(line)
-                do_translation = False
 
         # --- КНОПКА ЗАПУСКА ---
         if st.button("🔍 Запустить процесс", type="primary") or (target_file_from_excel and not st.session_state.analyzed):
@@ -211,42 +210,66 @@ if current_file_dir and os.path.exists(current_file_dir):
             master_map = load_master_map(master_file)
 
             for fp in selected_files:
-                result = process_configurator(
-                    fp, master_map, CONFIG_REGISTRY,
-                    options={
-                        'do_translation': do_translation,
-                        'do_document': do_document,
-                        'do_coloring': do_coloring,
-                    },
-                    master_file=master_file,
-                    final_root=final_root,
-                    selected_xml_path=selected_xml_path,
-                    validations=user_settings.get("validations", {}),
-                    logger=add_log,
-                    force=force,
-                )
-                if result is None:
+                try:
+                    result = process_configurator(
+                        fp, master_map, CONFIG_REGISTRY,
+                        options={
+                            'do_translation': do_translation,
+                            'do_document': do_document,
+                            'do_coloring': do_coloring,
+                        },
+                        master_file=master_file,
+                        final_root=final_root,
+                        selected_xml_path=selected_xml_path,
+                        validations=user_settings.get("validations", {}),
+                        logger=add_log,
+                        force=force,
+                    )
+                    if result is None:
+                        continue
+
+                    parser, xml_cache, is_ok = result
+
+                    if xml_cache:
+                        st.session_state.xml_cache = xml_cache
+
+                    st.session_state.file_errors.extend(parser.errors)
+                    if (is_ok or force) and do_sources:
+                        st.session_state.files_to_write.extend(parser.files_to_write)
+                except Exception as e:
+                    add_log(
+                        f"❌ Не удалось обработать '{os.path.basename(fp)}': {type(e).__name__}: {e}",
+                        level="ERROR"
+                    )
+                    # Один битый файл не должен валить весь прогон — продолжаем со следующим
                     continue
-
-                parser, xml_cache, is_ok = result
-
-                if xml_cache:
-                    st.session_state.xml_cache = xml_cache
-
-                st.session_state.file_errors.extend(parser.errors)
-                if (is_ok or force) and do_sources:
-                    st.session_state.files_to_write.extend(parser.files_to_write)
 
             if st.session_state.file_errors and not force:
                 st.session_state.process_step = "awaiting_confirm"
                 st.rerun()
             else:
                 if st.session_state.files_to_write:
+                    written_count = 0
+                    failed_count = 0
                     for item in st.session_state.files_to_write:
-                        os.makedirs(os.path.dirname(item['path']), exist_ok=True)
-                        with open(item['path'], "w", encoding=AppConfig.FILE_ENCODING) as f: 
-                            f.write(item['text'])
-                    add_log(f"✨ Процесс завершен! Файлов создано: {len(st.session_state.files_to_write)}")
+                        try:
+                            os.makedirs(os.path.dirname(item['path']), exist_ok=True)
+                            with open(item['path'], "w", encoding=AppConfig.FILE_ENCODING) as f:
+                                f.write(item['text'])
+                            written_count += 1
+                        except Exception as e:
+                            failed_count += 1
+                            add_log(
+                                f"❌ Не удалось записать '{item['path']}': {type(e).__name__}: {e}",
+                                level="ERROR"
+                            )
+                    if failed_count == 0:
+                        add_log(f"✨ Процесс завершен! Файлов создано: {written_count}")
+                    else:
+                        add_log(
+                            f"⚠️ Процесс завершен с ошибками. Записано: {written_count}, не удалось: {failed_count}",
+                            level="WARNING"
+                        )
                 st.session_state.process_step = "done"
 
         finish_logging()
