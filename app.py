@@ -9,7 +9,6 @@ for module in project_modules:
     del sys.modules[module]
 
 import streamlit as st
-import urllib.parse
 
 # Абсолютные импорты настроек
 from application.settings.app_config import AppConfig
@@ -70,27 +69,18 @@ user_settings = load_settings()
 
 # Инициализация состояний
 if 'logs' not in st.session_state: st.session_state.logs = []
-if 'analyzed' not in st.session_state: st.session_state.analyzed = False
 if 'process_step' not in st.session_state: st.session_state.process_step = None
 if 'ms_counter' not in st.session_state: st.session_state.ms_counter = 0
 if 'current_selection' not in st.session_state: st.session_state.current_selection = []
-if 'selection_initialized' not in st.session_state: st.session_state.selection_initialized = False
 # Сбрасываем live-плейсхолдер на каждом rerun'е (он живёт только в рамках одного запуска скрипта)
 st.session_state.log_placeholder = None
 
-target_file_from_excel = st.query_params.get("target_file")
-skip_paint_global = bool(target_file_from_excel)
-
-if target_file_from_excel:
-    target_file_from_excel = urllib.parse.unquote(target_file_from_excel).strip('"')
-    current_file_dir = os.path.normpath(os.path.dirname(target_file_from_excel))
-else:
-    new_dir = st.text_input("📁 Путь к папке Configs:", value=user_settings.get("base_dir", ""))
-    if new_dir != user_settings.get("base_dir", ""):
-        user_settings["base_dir"] = new_dir
-        save_settings(user_settings)
-        st.rerun()
-    current_file_dir = new_dir
+new_dir = st.text_input("📁 Путь к папке Configs:", value=user_settings.get("base_dir", ""))
+if new_dir != user_settings.get("base_dir", ""):
+    user_settings["base_dir"] = new_dir
+    save_settings(user_settings)
+    st.rerun()
+current_file_dir = new_dir
 
 if current_file_dir and os.path.exists(current_file_dir):
     target_files, master_file, _, final_root = find_master_and_targets(
@@ -100,12 +90,6 @@ if current_file_dir and os.path.exists(current_file_dir):
     if not master_file:
         st.error(f"❌ Мастер-конфигуратор не найден!")
     else:
-        default_sel = [f for f in target_files if target_file_from_excel and os.path.normpath(f) == os.path.normpath(target_file_from_excel)]
-        
-        if not st.session_state.selection_initialized:
-            st.session_state.current_selection = default_sel
-            st.session_state.selection_initialized = True
-            
         def on_ms_change():
             current_counter = st.session_state.get("ms_counter", 0)
             widget_key = f"ms_{current_counter}"
@@ -163,10 +147,9 @@ if current_file_dir and os.path.exists(current_file_dir):
                     for line in debug_info: st.text(line)
 
         # --- КНОПКА ЗАПУСКА ---
-        if st.button("🔍 Запустить процесс", type="primary") or (target_file_from_excel and not st.session_state.analyzed):
-            st.session_state.logs = [] # ЖЕСТКО ОБНУЛЯЕМ СТАРЫЙ ЛОГ В МОМЕНТ КЛИКА
+        if st.button("🔍 Запустить процесс", type="primary"):
+            st.session_state.logs = []  # ЖЕСТКО ОБНУЛЯЕМ СТАРЫЙ ЛОГ В МОМЕНТ КЛИКА
             st.session_state.process_step = "analyze"
-            st.session_state.analyzed = True
             
         # --- ЛОГ: фиксированная позиция на странице ---
         prepare_log_placeholder()
