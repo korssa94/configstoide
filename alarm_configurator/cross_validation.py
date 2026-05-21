@@ -44,6 +44,7 @@ def cross_validate_alarms(parser, filepath, clean_name, force=False):
         parser, linked_inout_files, base_dir=os.path.dirname(filepath)
     )
     inout_signals = _read_inout_signals(parser, inout_groups)
+    parser.inout_signals = inout_signals  # сохраняем для processor (нужно для построения текста "Условие")
     parser.log("⏱️ Сбор данных для проверки завершен", level="INFO")
 
     failed_rows = _compare_alarms_with_inout(
@@ -196,7 +197,8 @@ def _group_controllers_by_inout(parser, linked, base_dir):
 def _read_inout_signals(parser, inout_groups):
     """Для каждого уникального пути ТЭ5 — открывает файл ровно один раз, извлекает
     сигналы из всех листов MODEL_SETTINGS, раскидывает по контроллерам группы.
-    Возвращает {ctrl_name: [(sig_type, alg_name, active_setpoints), ...]}.
+
+    Возвращает {ctrl_name: [{type, alg_name, active_setpoints, setpoint_values, units}, ...]}.
     """
     setpoint_header_map = _build_setpoint_header_map()
     inout_signals = {}
@@ -216,7 +218,7 @@ def _read_inout_signals(parser, inout_groups):
                     continue
 
                 ws_inout = wb_inout[sheet_name]
-                alg_col_idx, create_col_idx, setpoint_cols = _find_inout_header_columns(
+                alg_col_idx, create_col_idx, setpoint_cols, units_col_idx = _find_inout_header_columns(
                     ws_inout, setpoint_header_map
                 )
 
@@ -224,7 +226,10 @@ def _read_inout_signals(parser, inout_groups):
                     continue
 
                 for row in ws_inout.iter_rows(min_row=TE5Config.DATA_START_ROW, values_only=True):
-                    max_idx = max([alg_col_idx, create_col_idx] + list(setpoint_cols.values()))
+                    all_indices = [alg_col_idx, create_col_idx] + list(setpoint_cols.values())
+                    if units_col_idx is not None:
+                        all_indices.append(units_col_idx)
+                    max_idx = max(all_indices)
                     if len(row) <= max_idx:
                         continue
 
@@ -236,14 +241,28 @@ def _read_inout_signals(parser, inout_groups):
                     if str(create_val).strip() != "1" and create_val != 1:
                         continue
 
-                    active_setpoints = []
+                    # Значения уставок (только для аналоговых сигналов taipar)
+                    setpoint_values = {}
                     if sig_type.lower() == "taipar":
                         for sp_name, sp_col in setpoint_cols.items():
                             sp_val = row[sp_col]
                             if sp_val is not None and str(sp_val).strip() != "":
-                                active_setpoints.append(sp_name)
+                                setpoint_values[sp_name] = sp_val
 
-                    extracted.append((sig_type.lower(), str(alg_val).strip(), active_setpoints))
+                    # Единица измерения
+                    units = ""
+                    if units_col_idx is not None:
+                        unit_val = row[units_col_idx]
+                        if unit_val is not None:
+                            units = str(unit_val).strip()
+
+                    extracted.append({
+                        "type": sig_type.lower(),
+                        "alg_name": str(alg_val).strip(),
+                        "active_setpoints": list(setpoint_values.keys()),
+                        "setpoint_values": setpoint_values,
+                        "units": units,
+                    })
 
             wb_inout.close()
 
@@ -257,32 +276,36 @@ def _read_inout_signals(parser, inout_groups):
 
 
 def _find_inout_header_columns(ws_inout, setpoint_header_map):
-    """Ищет в HEADER_ROW индексы колонок: алг.имя, "Создавать код", уставки.
-    Возвращает (alg_col_idx, create_col_idx, {sp_name: col_idx}).
+    """Ищет в HEADER_ROW индексы колонок: алг.имя, "Создавать код", уставки, единицы измерения.
+    Возвращает (alg_col_idx, create_col_idx, {sp_name: col_idx}, units_col_idx).
     """
     alg_col_idx = None
     create_col_idx = None
     setpoint_cols = {}
+    units_col_idx = None
+    units_header = TE5Config.COL_UNITS.lower()
 
     header_row_data = next(
         ws_inout.iter_rows(min_row=TE5Config.HEADER_ROW, max_row=TE5Config.HEADER_ROW, values_only=True),
         None,
     )
     if header_row_data is None:
-        return alg_col_idx, create_col_idx, setpoint_cols
+        return alg_col_idx, create_col_idx, setpoint_cols, units_col_idx
 
     for col_idx, cell_val in enumerate(header_row_data):
         if not cell_val:
             continue
-        header = str(cell_val).strip().lower()
+        header = str(cell_val).replace('\n', ' ').strip().lower()
         if header == TE5Config.COL_ALG_NAME.lower():
             alg_col_idx = col_idx
         elif header == TE5Config.COL_CREATE_CODE.lower():
             create_col_idx = col_idx
         elif header in setpoint_header_map:
             setpoint_cols[setpoint_header_map[header]] = col_idx
+        elif header == units_header:
+            units_col_idx = col_idx
 
-    return alg_col_idx, create_col_idx, setpoint_cols
+    return alg_col_idx, create_col_idx, setpoint_cols, units_col_idx
 
 
 def _build_setpoint_header_map():
@@ -305,15 +328,14 @@ def _compare_alarms_with_inout(parser, inout_signals, ctrl_to_inout_file, clean_
     """
     parser.log("🔍 Запуск перекрестной проверки сигналов...", level="INFO")
 
-    # Хэш-таблица для O(1)-поиска: {ctrl: {(type, alg_name_lower): set_of_active_setpoints}}
+        # Хэш-таблица для O(1)-поиска: {ctrl: {(type, alg_name_lower): set_of_active_setpoints}}
     inout_lookup = {}
     for ctrl, signals in inout_signals.items():
         inout_lookup[ctrl] = {}
         for item in signals:
-            s_type = item[0].lower()
-            s_name = item[1].lower()
-            s_sps = set(item[2]) if len(item) > 2 else set()
-            inout_lookup[ctrl][(s_type, s_name)] = s_sps
+            s_type = item["type"]
+            s_name = item["alg_name"].lower()
+            inout_lookup[ctrl][(s_type, s_name)] = set(item["active_setpoints"])
 
     ws_alarms = parser.wb_data[parser.config.SHEET_ALARMS]
     col_map = parser.get_column_mapping(ws_alarms, parser.config.HEADER_ROW)

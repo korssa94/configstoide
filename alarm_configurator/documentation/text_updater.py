@@ -41,10 +41,11 @@ def update_configurator_texts(filepath, parsed_objects, config_class, logger):
             row_count = last_row - config_class.DATA_START_ROW + 1
 
             fields_to_update = {
-                'trigger_text': getattr(config_class, 'COL_CONDITION_TEXT', None),
-                'fault_text':   getattr(config_class, 'COL_FAULT_TEXT', None),
-                'set_text':     getattr(config_class, 'COL_SET_TEXT', None),
-                'reset_text':   getattr(config_class, 'COL_RESET_TEXT', None),
+                'condition_display_text': getattr(config_class, 'COL_CONDITION', None),
+                'trigger_text':           getattr(config_class, 'COL_CONDITION_TEXT', None),
+                'fault_text':             getattr(config_class, 'COL_FAULT_TEXT', None),
+                'set_text':               getattr(config_class, 'COL_SET_TEXT', None),
+                'reset_text':             getattr(config_class, 'COL_RESET_TEXT', None),
             }
 
             # Читаем только нужные колонки в память
