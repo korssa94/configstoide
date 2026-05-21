@@ -1,5 +1,4 @@
-# settings/alarm_config.py
-from settings import AppConfig
+from application.settings.app_config import AppConfig
 
 class AlarmConfig(AppConfig):
     """Настройки конфигуратора Сигнализаций"""
@@ -78,3 +77,21 @@ class AlarmConfig(AppConfig):
     # Настройки строк
     HEADER_ROW = 1
     DATA_START_ROW = 2
+
+
+    # --- ТИПЫ СИГНАЛИЗАЦИЙ (значение колонки COL_TYPE) ---
+    ALARM_TYPE_WARNING   = "ПС"   # Предупредительная: пишется в alr (+ ppu если действие критическое)
+    ALARM_TYPE_PRESTART  = "ППУ"  # Предпусковые условия: пишется в ppu
+    ALARM_TYPE_EMERGENCY = "АС"   # Аварийная: пишется в trs или crs в зависимости от действия
+    ALARM_TYPE_LIMITING  = "ОС"   # Ограничительная: пишется в lmt
+
+    # Для ПС: эти действия добавляют объект ppu (помимо alr)
+    ACTIONS_ADDING_PPU = ["ХР", "ГР", "БЗ"]
+    # Для АС: эти действия делают сигнал критическим (crs); остальные — тревожным (trs)
+    ACTIONS_MAKING_CRS = ["АОсс", "АОбс", "ВОсс", "ВОбс", "АО", "ВО", "Пожар"]
+
+    # Уставки нижнего порога (знак "<" в текстовом виде условия)
+    SETPOINT_LOWS = ["LL", "L1", "L"]
+    # Уставки верхнего порога (знак ">" в текстовом виде условия)
+    SETPOINT_HIGHS = ["H", "H1", "HH"]
+

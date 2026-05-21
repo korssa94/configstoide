@@ -1,5 +1,5 @@
 import os
-from settings import AppConfig
+from application.settings.app_config import AppConfig
 import pandas as pd
 
 def find_plcopen_xmls(project_path):
@@ -58,3 +58,58 @@ def cache_to_df(cache):
                     "Описание": info.get('comment', '')
                 })
     return pd.DataFrame(rows)
+
+
+def find_master_and_targets(current_dir, config_registry, master_keyword):
+    """Поднимается по дереву до папки Config(s), ищет Мастер-конфигуратор
+    и обходит current_dir в поисках всех целевых файлов (по KEYWORD_FILE из реестра).
+
+    Возвращает кортеж:
+        target_files (list[str]) — пути к найденным конфигураторам
+        master_file (str | None) — путь к Мастер-конфигуратору
+        project_root (str | None) — найденная папка Config/Configs
+        final_root (str)          — рабочий корень: project_root → папка мастера → current_dir
+    """
+    target_files = []
+    master_file = None
+    project_root = None
+    check_dir = current_dir
+
+    while True:
+        folder_name = os.path.basename(check_dir).lower()
+        potential_masters = [
+            os.path.join(check_dir, f) for f in os.listdir(check_dir)
+            if master_keyword in f
+            and f.endswith(('.xlsx', '.xlsm'))
+            and not f.startswith('~$')
+        ]
+        if potential_masters and master_file is None:
+            master_file = potential_masters[0]
+        if folder_name in ["config", "configs"]:
+            project_root = check_dir
+            break
+        parent = os.path.dirname(check_dir)
+        if parent == check_dir:
+            break
+        check_dir = parent
+
+    final_root = project_root if project_root else (
+        os.path.dirname(master_file) if master_file else current_dir
+    )
+
+    active_keywords = []
+    for v in config_registry.values():
+        kw = v["config"].KEYWORD_FILE
+        if isinstance(kw, list):
+            active_keywords.extend(kw)
+        else:
+            active_keywords.append(kw)
+
+    for root, dirs, files in os.walk(current_dir):
+        for f in files:
+            if f.startswith('~$') or not f.endswith(('.xlsx', '.xlsm')):
+                continue
+            if any(k in f for k in active_keywords):
+                target_files.append(os.path.join(root, f))
+
+    return target_files, master_file, project_root, final_root

@@ -22,3 +22,5 @@ ENV/
 .DS_Store
 Thumbs.db
 user_settings.json
+server_log.txt
+dev_freeze.bat

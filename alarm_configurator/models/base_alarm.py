@@ -56,7 +56,6 @@ class BaseAlarm:
                 if self.type == "АС":
                     self.fault_cond = f"aipar.{self.param_code}.flt OR NOT aipar.{self.param_code}.setpoint.is{self.setpoint}"
         
-        @staticmethod
         def clean_val(val):
             """Очистка текста из ячеек Excel от технических артефактов"""
             if val is None:

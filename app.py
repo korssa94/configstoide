@@ -1,27 +1,30 @@
 # app.py
 import sys
 import os
-
+import datetime
 # --- БЛОК ОЧИСТКИ КЭША ---
-# Добавили "application" в список очистки, чтобы Streamlit видел изменения в наших новых файлах
-project_modules = [m for m in sys.modules if any(k in m for k in ["parsers", "models", "settings", "application"])]
+# Настраиваем очистку под новые имена доменных пакетов
+project_modules = [m for m in sys.modules if any(k in m for k in ["alarm_configurator", "inout_configurator", "shared", "application"])]
 for module in project_modules:
     del sys.modules[module]
 
 import streamlit as st
-import openpyxl
-import re
-import urllib.parse
-from settings import AppConfig, TE5Config, AlarmConfig
-from parsers import TE5Parser, AlarmParser
-from documentation.document_updater import update_configurator_document
-from documentation.text_updater import update_configurator_texts
-from documentation.color_updater import update_configurator_colors
 
-# Импорты из нашей новой архитектуры
-from application.scanner import find_plcopen_xmls
+# Абсолютные импорты настроек
+from application.settings.app_config import AppConfig
+from inout_configurator.config import TE5Config
+from alarm_configurator.config import AlarmConfig
+
+# Абсолютные импорты парсеров
+from inout_configurator.parser import TE5Parser
+from alarm_configurator.parser import AlarmParser
+
+# Импорты из новой архитектуры
+from application.scanner import find_plcopen_xmls, find_master_and_targets
 from application.settings_manager import load_settings, save_settings, sync_addon_path, on_checkbox_change
-from application.logger import add_log, render_logs
+from application.logger import add_log, prepare_log_placeholder, finish_logging
+from application.master_loader import load_master_map
+from application.processor import process_configurator
 
 CONFIG_REGISTRY = {
     "TE5": {"config": TE5Config, "parser": TE5Parser},
@@ -66,68 +69,27 @@ user_settings = load_settings()
 
 # Инициализация состояний
 if 'logs' not in st.session_state: st.session_state.logs = []
-if 'analyzed' not in st.session_state: st.session_state.analyzed = False
 if 'process_step' not in st.session_state: st.session_state.process_step = None
 if 'ms_counter' not in st.session_state: st.session_state.ms_counter = 0
 if 'current_selection' not in st.session_state: st.session_state.current_selection = []
-if 'selection_initialized' not in st.session_state: st.session_state.selection_initialized = False
+# Сбрасываем live-плейсхолдер на каждом rerun'е (он живёт только в рамках одного запуска скрипта)
+st.session_state.log_placeholder = None
 
-target_file_from_excel = st.query_params.get("target_file")
-skip_paint_global = bool(target_file_from_excel)
-
-if target_file_from_excel:
-    target_file_from_excel = urllib.parse.unquote(target_file_from_excel).strip('"')
-    current_file_dir = os.path.normpath(os.path.dirname(target_file_from_excel))
-else:
-    new_dir = st.text_input("📁 Путь к папке Configs:", value=user_settings.get("base_dir", ""))
-    if new_dir != user_settings.get("base_dir", ""):
-        user_settings["base_dir"] = new_dir
-        save_settings(user_settings)
-        st.rerun()
-    current_file_dir = new_dir
+new_dir = st.text_input("📁 Путь к папке Configs:", value=user_settings.get("base_dir", ""))
+if new_dir != user_settings.get("base_dir", ""):
+    user_settings["base_dir"] = new_dir
+    save_settings(user_settings)
+    st.rerun()
+current_file_dir = new_dir
 
 if current_file_dir and os.path.exists(current_file_dir):
-    target_files = []
-    master_file = None
-    project_root = None 
-    check_dir = current_file_dir
-    
-    while True:
-        folder_name = os.path.basename(check_dir).lower()
-        potential_masters = [os.path.join(check_dir, f) for f in os.listdir(check_dir) if AppConfig.KEYWORD_MASTER in f and f.endswith(('.xlsx', '.xlsm')) and not f.startswith('~$')]
-        if potential_masters and master_file is None: master_file = potential_masters[0]
-        if folder_name in ["config", "configs"]:
-            project_root = check_dir
-            break
-        parent = os.path.dirname(check_dir)
-        if parent == check_dir: break
-        check_dir = parent
-        
-    final_root = project_root if project_root else (os.path.dirname(master_file) if master_file else current_file_dir)
-
-    active_keywords = []
-    for v in CONFIG_REGISTRY.values():
-        kw = v["config"].KEYWORD_FILE
-        if isinstance(kw, list):
-            active_keywords.extend(kw)
-        else:
-            active_keywords.append(kw)
-
-    for root, dirs, files in os.walk(current_file_dir):
-        for f in files:
-            if f.startswith('~$') or not f.endswith(('.xlsx', '.xlsm')): continue
-            if any(k in f for k in active_keywords):
-                target_files.append(os.path.join(root, f))
+    target_files, master_file, _, final_root = find_master_and_targets(
+        current_file_dir, CONFIG_REGISTRY, AppConfig.KEYWORD_MASTER
+    )
 
     if not master_file:
         st.error(f"❌ Мастер-конфигуратор не найден!")
     else:
-        default_sel = [f for f in target_files if target_file_from_excel and os.path.normpath(f) == os.path.normpath(target_file_from_excel)]
-        
-        if not st.session_state.selection_initialized:
-            st.session_state.current_selection = default_sel
-            st.session_state.selection_initialized = True
-            
         def on_ms_change():
             current_counter = st.session_state.get("ms_counter", 0)
             widget_key = f"ms_{current_counter}"
@@ -180,143 +142,131 @@ if current_file_dir and os.path.exists(current_file_dir):
                 )
                 selected_xml_path = xml_options[selected_label]
             else:
-                st.warning(f"⚠️ Файлы .plcopen.xml не найдены в подпапках {AppConfig.SOURCE_EXPORT_FOLDER}")
+                st.warning(f"⚠️ Обновление текстового описания пропущено: plcopen.xml не найден.")
                 with st.expander("🛠 Дебаг поиска"):
                     for line in debug_info: st.text(line)
-                do_translation = False
 
         # --- КНОПКА ЗАПУСКА ---
-        if st.button("🔍 Запустить процесс", type="primary") or (target_file_from_excel and not st.session_state.analyzed):
+        if st.button("🔍 Запустить процесс", type="primary"):
+            st.session_state.logs = []  # ЖЕСТКО ОБНУЛЯЕМ СТАРЫЙ ЛОГ В МОМЕНТ КЛИКА
             st.session_state.process_step = "analyze"
-            st.session_state.analyzed = True
             
+        # --- ЛОГ: фиксированная позиция на странице ---
+        prepare_log_placeholder()
+
         # --- БЛОК ОЖИДАНИЯ РЕШЕНИЯ ---
-        if st.session_state.process_step == "awaiting_confirm":
-            st.error(f"❌ Найдено ошибок: {len(st.session_state.file_errors)}. Генерация приостановлена!")
-            col_btn1, col_btn2 = st.columns(2) 
-            with col_btn1:
-                if st.button("⚠️ Всё равно создать (без ошибочных)", type="primary", use_container_width=True):
-                    st.session_state.process_step = "generate_forced"
-                    st.rerun()
-            with col_btn2:
-                if st.button("🛑 Отменить генерацию", use_container_width=True):
-                    st.session_state.process_step = "done"
-                    add_log("🛑 Генерация отменена пользователем.", level="ERROR")
-                    st.rerun()
+        # Резервируем выделенный слот под аварийный интерфейс
+        confirm_placeholder = st.empty()
         
+        if st.session_state.process_step == "awaiting_confirm":
+            with confirm_placeholder.container():
+                st.error(f"❌ Найдено ошибок: {len(st.session_state.file_errors)}. Генерация приостановлена!")
+                col_btn1, col_btn2 = st.columns(2) 
+                with col_btn1:
+                    if st.button("⚠️ Всё равно создать (без ошибочных)", type="primary", use_container_width=True):
+                        st.session_state.process_step = "generate_forced"
+                        st.rerun()
+                with col_btn2:
+                    if st.button("🛑 Отменить генерацию", use_container_width=True):
+                        st.session_state.process_step = "done"
+                        add_log("🛑 Генерация отменена пользователем.", level="ERROR")
+                        st.rerun()
+        else:
+            # КРИТИЧНО: Принудительно выжигаем старые кнопки из DOM
+            confirm_placeholder.empty()
+
         # --- ОСНОВНАЯ ЛОГИКА ---
         if st.session_state.process_step in ["analyze", "generate_forced"]:
             force = (st.session_state.process_step == "generate_forced")
-            
+
             if not force:
-                st.session_state.logs = []
                 st.session_state.failed_rows_cache = {} # Очищаем кэш ошибочных строк перед каждым новым анализом
-                add_log("🚀 Старт процесса генерации")
+                # Проверяем, если список пустой (значит кнопка только что нажата), пишем старт
+                if not st.session_state.logs:
+                    add_log("🚀 Старт процесса генерации")
             else:
                 add_log("🚀 Принудительная генерация (ошибочные сигналы исключены)")
                 
             st.session_state.file_errors = []
             st.session_state.files_to_write = []
             
-            wb_master = openpyxl.load_workbook(master_file, data_only=True)
-            ws_m = wb_master.active
-            master_map = {}
-            plc_headers = []
-            plc_col_indices = []
+            master_map = load_master_map(master_file)
 
-            for row_idx, row in enumerate(ws_m.iter_rows(values_only=True)):
-                if row and str(row[0]).strip() == "Контроллер":
-                    plc_headers = row
-                    plc_col_indices = [i for i, val in enumerate(row) if i > 0 and val]
-                    break
-
-            for row in ws_m.iter_rows(values_only=True):
-                if not row or str(row[0]).strip() == "Контроллер": continue
-                for idx in plc_col_indices:
-                    raw_val = row[idx]
-                    if raw_val and str(raw_val).strip() != "None":
-                        f_name = str(raw_val).strip()
-                        p_name = str(plc_headers[idx]).strip()
-                        if f_name not in master_map: master_map[f_name] = []
-                        if p_name not in master_map[f_name]: master_map[f_name].append(p_name)
-
+            seen_basenames = set()
             for fp in selected_files:
-                file_name = os.path.basename(fp)
-                clean_n = re.sub(r'\s+v\d+\.\d+\.\d+.*$', '', os.path.splitext(file_name)[0]).strip()
-                file_type = next((k for k, v in CONFIG_REGISTRY.items() if (any(kw in file_name for kw in v["config"].KEYWORD_FILE) if isinstance(v["config"].KEYWORD_FILE, list) else v["config"].KEYWORD_FILE in file_name)), None)
-                if not file_type: continue
-                
-                ctrls = master_map.get(clean_n, [])
-                if not force: add_log(f"📂 Анализ: {clean_n} (ПЛК: {len(ctrls)})")
-                
-                if ctrls:
-                    parser_class = CONFIG_REGISTRY[file_type]["parser"]
-                    config_class = CONFIG_REGISTRY[file_type]["config"]
-                    parser = parser_class(fp, final_root, ctrls, config_class, logger=add_log)
-                    
-                    # Прокидываем путь к Мастеру внутрь парсера для кросс-проверок
-                    parser.master_file = master_file 
-                    
-                    is_ok = parser.parse(clean_n, user_settings.get("validations", {}).get(file_type, {}), force=force)
-                    
-                    # --- БЛОК ОБНОВЛЕНИЯ ТЕКСТОВ ---
-                    if (is_ok or force) and do_translation and selected_xml_path and getattr(config_class, 'SUPPORT_TEXT_UPDATE', False):
-                        from parsers.xml_parser import build_xml_cache
-                        from documentation.condition_translator import translate_condition
-                        
-                        add_log(f"📝 Перевод кода в текст с использованием XML-кэша...")
-                        xml_cache = build_xml_cache(selected_xml_path, target_configs=ctrls, logger=add_log)
+                bn = os.path.basename(fp)
+                if bn in seen_basenames:
+                    add_log(
+                        f"⚠️ Пропуск дубликата: файл '{bn}' уже обработан под другим путём — '{fp}'. "
+                        f"Возможно, такая же копия лежит в нескольких подкаталогах.",
+                        level="WARNING"
+                    )
+                    continue
+                seen_basenames.add(bn)
+
+                try:
+                    result = process_configurator(
+                        fp, master_map, CONFIG_REGISTRY,
+                        options={
+                            'do_translation': do_translation,
+                            'do_document': do_document,
+                            'do_coloring': do_coloring,
+                        },
+                        master_file=master_file,
+                        final_root=final_root,
+                        selected_xml_path=selected_xml_path,
+                        validations=user_settings.get("validations", {}),
+                        logger=add_log,
+                        force=force,
+                    )
+                    if result is None:
+                        continue
+
+                    parser, xml_cache, is_ok = result
+
+                    if xml_cache:
                         st.session_state.xml_cache = xml_cache
-                        
-                        parsed_objects = getattr(parser, 'all_parsed_objects', [])
-                        
-                        for obj in parsed_objects:
-                            if hasattr(obj, 'trigger_cond') and obj.trigger_cond:
-                                obj.trigger_text = translate_condition(obj.trigger_cond, xml_cache)
-                            if hasattr(obj, 'fault_cond') and obj.fault_cond:
-                                obj.fault_text = translate_condition(obj.fault_cond, xml_cache)
-                            if hasattr(obj, 'set_code') and obj.set_code:
-                                obj.set_text = translate_condition(obj.set_code, xml_cache)
-                            if hasattr(obj, 'reset_code') and obj.reset_code:
-                                obj.reset_text = translate_condition(obj.reset_code, xml_cache)
-                                
-                        add_log(f"✍️ Обновление текстовых описаний в конфигураторе...", "INFO")
-                        update_configurator_texts(fp, parsed_objects, config_class, add_log)
-                    # ------------------------------------------------
-
-                    # --- БЛОК ОБНОВЛЕНИЯ ДОКУМЕНТА (xlwings) ---
-                    if (is_ok or force) and do_document and getattr(config_class, 'SUPPORT_DOC_UPDATE', False):
-                        add_log(f"Обновление документа {clean_n}...", "INFO")
-                        parsed_objects = getattr(parser, 'all_parsed_objects', [])
-                        update_configurator_document(fp, parsed_objects, config_class, add_log)
-                    # ------------------------------------------------
-
-                    # --- БЛОК ПОКРАСКИ ЯЧЕЕК (xlwings) ---
-                    if (is_ok or force) and do_coloring and getattr(config_class, 'SUPPORT_COLOR_UPDATE', False):
-                        add_log(f"🎨 Анализ и обновление цветов ячеек...", "INFO")
-                        # Передаем карту покраски, которую сформировал парсер
-                        rows_to_color = getattr(parser, 'rows_to_color', {})
-                        update_configurator_colors(fp, rows_to_color, config_class, add_log)
-                    # ------------------------------------------------
 
                     st.session_state.file_errors.extend(parser.errors)
                     if (is_ok or force) and do_sources:
                         st.session_state.files_to_write.extend(parser.files_to_write)
+                except Exception as e:
+                    add_log(
+                        f"❌ Не удалось обработать '{os.path.basename(fp)}': {type(e).__name__}: {e}",
+                        level="ERROR"
+                    )
+                    # Один битый файл не должен валить весь прогон — продолжаем со следующим
+                    continue
 
             if st.session_state.file_errors and not force:
                 st.session_state.process_step = "awaiting_confirm"
                 st.rerun()
             else:
                 if st.session_state.files_to_write:
+                    written_count = 0
+                    failed_count = 0
                     for item in st.session_state.files_to_write:
-                        os.makedirs(os.path.dirname(item['path']), exist_ok=True)
-                        with open(item['path'], "w", encoding=AppConfig.FILE_ENCODING) as f: 
-                            f.write(item['text'])
-                    add_log(f"✨ Процесс завершен! Файлов создано: {len(st.session_state.files_to_write)}")
+                        try:
+                            os.makedirs(os.path.dirname(item['path']), exist_ok=True)
+                            with open(item['path'], "w", encoding=AppConfig.FILE_ENCODING) as f:
+                                f.write(item['text'])
+                            written_count += 1
+                        except Exception as e:
+                            failed_count += 1
+                            add_log(
+                                f"❌ Не удалось записать '{item['path']}': {type(e).__name__}: {e}",
+                                level="ERROR"
+                            )
+                    if failed_count == 0:
+                        add_log(f"✨ Процесс завершен! Файлов создано: {written_count}")
+                    else:
+                        add_log(
+                            f"⚠️ Процесс завершен с ошибками. Записано: {written_count}, не удалось: {failed_count}",
+                            level="WARNING"
+                        )
                 st.session_state.process_step = "done"
 
-    # Вызов нашей вынесенной функции для отрисовки логов
-    render_logs()
+        finish_logging()
 
     from application.logger import render_xml_inspector
     render_xml_inspector()

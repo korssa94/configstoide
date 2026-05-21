@@ -3,7 +3,7 @@ import json
 import win32com.client
 import pythoncom
 import streamlit as st
-from settings.app_config import AppConfig
+from application.settings.app_config import AppConfig
 
 def load_settings():
     if os.path.exists(AppConfig.SETTINGS_FILE):

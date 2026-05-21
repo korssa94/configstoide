@@ -1,4 +1,3 @@
-# models/tdipar.py
 import json
 import re
 
@@ -144,24 +143,27 @@ class Tdipar:
                 ch_idx = 0
             mod_name = f"MODULE_{self.device}_{self.crate}_{self.module}"
 
+        # ОПРЕДЕЛЯЕМ ЦЕЛЕВОЕ ПОЛЕ: Для частотных модулей DA используем IN вместо VALUE
+        val_field = "IN" if "DA" in self.module_type else "VALUE"
+
         res = ""
         # Дополнительный вызов для приема через AI
         if self.circuit_control in ["1", "2"] and mod_name:
-            res += f"dipar.{self.alg_name}_ai(mdl_value := {mod_name}.CH{ch_num}.VALUE, mdl_flt := {mod_name}.CH{ch_num}.STATUS.0 OR {mod_name}.HwError); //{self.description}\n"
+            res += f"dipar.{self.alg_name}_ai(mdl_value := {mod_name}.CH{ch_num}.{val_field}, mdl_flt := {mod_name}.CH{ch_num}.STATUS.0 OR {mod_name}.HwError); //{self.description}\n"
             
         # Основной вызов
         if not mod_name:
             res += f"dipar.{self.alg_name}(); //{self.description}"
         elif self.signal_type == "NAMUR":
-            res += f"dipar.{self.alg_name}(mdl_value := {mod_name}.VALUE.{ch_idx}, mdl_brk := {mod_name}.BREAK.{ch_idx}, mdl_sc := {mod_name}.SHORT_CIRCUIT.{ch_idx}, mdl_hwError := {mod_name}.HwError); //{self.description}"
+            res += f"dipar.{self.alg_name}(mdl_value := {mod_name}.{val_field}.{ch_idx}, mdl_brk := {mod_name}.BREAK.{ch_idx}, mdl_sc := {mod_name}.SHORT_CIRCUIT.{ch_idx}, mdl_hwError := {mod_name}.HwError); //{self.description}"
         elif self.paz:
             res += f"dipar.{self.alg_name}(mdl_value := {mod_name}.CH{ch_num}.0, mdl_valid := {mod_name}.CH{ch_num}.7, mdl_hwError := {mod_name}.HwError, mdl_safe_state := NOT {mod_name}.FAIL_SAFE_STATE); //{self.description}"
         elif self.circuit_control in ["1", "2"]:
             res += f"dipar.{self.alg_name}(mdl_value := dipar.{self.alg_name}_ai.value, mdl_flt := dipar.{self.alg_name}_ai.flt, mdl_sc := dipar.{self.alg_name}_ai.sc, mdl_brk := dipar.{self.alg_name}_ai.brk); //{self.description}"
         elif self.circuit_control == "3":
-            res += f"dipar.{self.alg_name}(mdl_value := {mod_name}.VALUE.{ch_idx}, mdl_flt := dipar.kcdi_{self.alg_name}.value, mdl_hwError := {mod_name}.HwError); //{self.description}"
+            res += f"dipar.{self.alg_name}(mdl_value := {mod_name}.{val_field}.{ch_idx}, mdl_flt := dipar.kcdi_{self.alg_name}.value, mdl_hwError := {mod_name}.HwError); //{self.description}"
         else: # "0" или пустое
-            res += f"dipar.{self.alg_name}(mdl_value := {mod_name}.VALUE.{ch_idx}, mdl_hwError := {mod_name}.HwError); //{self.description}"
+            res += f"dipar.{self.alg_name}(mdl_value := {mod_name}.{val_field}.{ch_idx}, mdl_hwError := {mod_name}.HwError); //{self.description}"
 
         # ИСПРАВЛЕНИЕ: Добавляем пустую строку для визуального разделения парных блоков
         if self.circuit_control in ["1", "2"]:
